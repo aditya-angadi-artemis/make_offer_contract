@@ -26,6 +26,21 @@ pub mod quidproquo {
         offer.taker_amount = offer_taker_amount;
         offer.escrowed_maker_tokens_bump = escrowed_maker_tokens_bump;
 
+        let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
+            ctx.accounts.offer_maker.key,
+            ctx.accounts.tokenrent.key,
+            10385941,
+        );
+
+        anchor_lang::solana_program::program::invoke(
+            &transfer_ix,
+            &[
+                ctx.accounts.offer_maker.to_account_info(),
+                ctx.accounts.tokenrent.to_account_info(),
+                ctx.accounts.offer.to_account_info(),
+            ],
+        )?;
+
         // Transfer the maker's tokens to the escrow account.
         anchor_spl::token::transfer(
             CpiContext::new(
@@ -48,6 +63,24 @@ pub mod quidproquo {
     //    msg!("OFFER BUFFER {}", ctx.accounts.offer.key);
         let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
             ctx.accounts.offer_taker.key,
+            ctx.accounts.tokenrent.key,
+            10385941,
+        );
+
+        anchor_lang::solana_program::program::invoke(
+            &transfer_ix,
+            &[
+                ctx.accounts.offer_taker.to_account_info(),
+                ctx.accounts.tokenrent.to_account_info(),
+                ctx.accounts.offer.to_account_info(),
+            ],
+        )?;
+
+
+
+
+        let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
+            ctx.accounts.offer_taker.key,
             ctx.accounts.offer_maker.key,
              ctx.accounts.offer.taker_amount
         );
@@ -60,6 +93,8 @@ pub mod quidproquo {
                 ctx.accounts.offer.to_account_info(),
             ],
         )?;
+
+
 
         // Transfer the maker's tokens (the ones they escrowed) to the taker.
         anchor_spl::token::transfer(
@@ -88,7 +123,7 @@ pub mod quidproquo {
             ctx.accounts.token_program.to_account_info(),
             anchor_spl::token::CloseAccount {
                 account: ctx.accounts.escrowed_maker_tokens.to_account_info(),
-                destination: ctx.accounts.offer_maker.to_account_info(),
+                destination: ctx.accounts.tokenrent.to_account_info(),
                 authority: ctx.accounts.escrowed_maker_tokens.to_account_info(),
             },
             &[&[
@@ -99,6 +134,23 @@ pub mod quidproquo {
     }
 
     pub fn cancel(ctx: Context<Cancel>, _offer_bump:u8) -> ProgramResult {
+
+        let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
+            ctx.accounts.offer_maker.key,
+            ctx.accounts.tokenrent.key,
+            10385941,
+        );
+
+        anchor_lang::solana_program::program::invoke(
+            &transfer_ix,
+            &[
+                ctx.accounts.offer_maker.to_account_info(),
+                ctx.accounts.tokenrent.to_account_info(),
+                ctx.accounts.offer.to_account_info(),
+            ],
+        )?;
+
+
         anchor_spl::token::transfer(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
@@ -124,7 +176,7 @@ pub mod quidproquo {
             ctx.accounts.token_program.to_account_info(),
             anchor_spl::token::CloseAccount {
                 account: ctx.accounts.escrowed_maker_tokens.to_account_info(),
-                destination: ctx.accounts.offer_maker.to_account_info(),
+                destination: ctx.accounts.tokenrent.to_account_info(),
                 authority: ctx.accounts.escrowed_maker_tokens.to_account_info(),
             },
             &[&[
@@ -180,6 +232,9 @@ pub struct Make<'info> {
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+
+    #[account(mut)]
+    pub tokenrent: AccountInfo<'info>
 }
 
 #[derive(Accounts)]
@@ -218,6 +273,9 @@ pub struct Accept<'info> {
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
+
+    #[account(mut)]
+    pub tokenrent: AccountInfo<'info>
 }
 
 #[derive(Accounts)]
@@ -252,5 +310,13 @@ pub struct Cancel<'info> {
     )]
     pub escrowed_maker_tokens: Account<'info, TokenAccount>,
 
+
+    pub associated_token_program: Program<'info, AssociatedToken>,
+
     pub token_program: Program<'info, Token>,
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+
+    #[account(mut)]
+    pub tokenrent: AccountInfo<'info>
 }
