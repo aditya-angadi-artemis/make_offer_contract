@@ -4,7 +4,7 @@ use anchor_spl::{
     token::{Mint, Token, TokenAccount},
 };
 
-declare_id!("CMr8vcCZ1pqPmjWL25m213GSGZGKhcpxHMNbHAhyLXjr");
+declare_id!("Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS");
 
 #[program]
 pub mod quidproquo {
@@ -16,13 +16,14 @@ pub mod quidproquo {
     pub fn make(
         ctx: Context<Make>,
         escrowed_maker_tokens_bump: u8,
-        offer_bump: u8,
+        offer_maker_amount: u64,
         offer_taker_amount: u64,
     ) -> ProgramResult {
         // Store some state about the offer being made. We'll need this later if
         // the offer gets accepted or cancelled.
         let offer = &mut ctx.accounts.offer;
         offer.maker = ctx.accounts.offer_maker.key();
+        offer.taker_mint = ctx.accounts.taker_mint.key();
         offer.taker_amount = offer_taker_amount;
         offer.escrowed_maker_tokens_bump = escrowed_maker_tokens_bump;
 
@@ -37,29 +38,30 @@ pub mod quidproquo {
                     authority: ctx.accounts.offer_maker.to_account_info(),
                 },
             ),
-            1,
+            offer_maker_amount,
         )
     }
 
     // Accept an offer by providing the right amount + kind of tokens. This
     // unlocks the tokens escrowed by the offer maker.
-    pub fn accept(ctx: Context<Accept>, _offer_bump:u8) -> ProgramResult {
-        
-      //  msg!("OFFER BUFFER {}", ctx.accounts.offer.key);
-        // let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
-        //     ctx.accounts.offer_taker.key,
-        //     ctx.accounts.offer_maker.key,
-        //      ctx.accounts.offer.taker_amount
-        // );
-
-        // anchor_lang::solana_program::program::invoke(
-        //     &transfer_ix,
-        //     &[
-        //         ctx.accounts.offer_taker.to_account_info(),
-        //         ctx.accounts.offer_maker.to_account_info(),
-        //         ctx.accounts.offer.to_account_info(),
-        //     ],
-        // )?;
+    pub fn accept(ctx: Context<Accept>) -> ProgramResult {
+        // Transfer the taker's tokens to the maker.
+        anchor_spl::token::transfer(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                anchor_spl::token::Transfer {
+                    // Don't need to worry about the accepter sneakily providing
+                    // the wrong kind of tokens because we've already checked
+                    // that while deriving Accounts for the Accept struct.
+                    from: ctx.accounts.offer_takers_taker_tokens.to_account_info(),
+                    to: ctx.accounts.offer_makers_taker_tokens.to_account_info(),
+                    // The offer_taker had to sign from the client
+                    authority: ctx.accounts.offer_taker.to_account_info(),
+                },
+            ),
+            // The necessary amount was set by the offer maker.
+            ctx.accounts.offer.taker_amount,
+        )?;
 
         // Transfer the maker's tokens (the ones they escrowed) to the taker.
         anchor_spl::token::transfer(
@@ -79,7 +81,7 @@ pub mod quidproquo {
                 ]],
             ),
             // The amount here is just the entire balance of the escrow account.
-          1,
+            ctx.accounts.escrowed_maker_tokens.amount,
         )?;
 
         // Finally, close the escrow account and refund the maker (they paid for
@@ -98,7 +100,7 @@ pub mod quidproquo {
         ))
     }
 
-    pub fn cancel(ctx: Context<Cancel>, _offer_bump:u8) -> ProgramResult {
+    pub fn cancel(ctx: Context<Cancel>) -> ProgramResult {
         anchor_spl::token::transfer(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
@@ -115,7 +117,7 @@ pub mod quidproquo {
                     &[ctx.accounts.offer.escrowed_maker_tokens_bump],
                 ]],
             ),
-            1,
+            ctx.accounts.escrowed_maker_tokens.amount,
         )?;
 
         // Close the escrow's token account and refund the maker (they paid for
@@ -140,8 +142,12 @@ pub struct Offer {
     // We store the offer maker's key so that they can cancel the offer (we need
     // to know who should sign).
     pub maker: Pubkey,
-    
+
+    // What kind of tokens does the offer maker want in return, and how many of
+    // them?
+    pub taker_mint: Pubkey,
     pub taker_amount: u64,
+
     // When the maker makes their offer, we store their offered tokens in an
     // escrow account that lives at a program-derived address, with seeds given
     // by the `Offer` account's address. Storing the corresponding bump here
@@ -150,9 +156,9 @@ pub struct Offer {
 }
 
 #[derive(Accounts)]
-#[instruction(escrowed_maker_tokens_bump: u8, offer_bump:u8)]
+#[instruction(escrowed_maker_tokens_bump: u8)]
 pub struct Make<'info> {
-    #[account(init, payer = offer_maker, seeds = [offer_maker.to_account_info().key.as_ref(), maker_mint.to_account_info().key.as_ref()], bump = offer_bump,  space = 8 + 32 + 8 + 1)]
+    #[account(init, payer = offer_maker, space = 8 + 32 + 32 + 8 + 1)]
     pub offer: Account<'info, Offer>,
 
     #[account(mut)]
@@ -176,55 +182,58 @@ pub struct Make<'info> {
     pub escrowed_maker_tokens: Account<'info, TokenAccount>,
 
     pub maker_mint: Account<'info, Mint>,
-  
+    pub taker_mint: Account<'info, Mint>,
+
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
-#[instruction(offer_bump:u8)]
 pub struct Accept<'info> {
     #[account(
         mut,
-
-        seeds = [offer_maker.key.as_ref(), maker_mint.to_account_info().key.as_ref()],
-        bump = offer_bump,
         // make sure the offer_maker account really is whoever made the offer!
         constraint = offer.maker == *offer_maker.key,
         // at the end of the instruction, close the offer account (don't need it
         // anymore) and send its rent back to the offer_maker
         close = offer_maker
-
     )]
     pub offer: Account<'info, Offer>,
 
-    #[account(
-        mut,
-        seeds = [offer.key().as_ref()],
-        bump = offer.escrowed_maker_tokens_bump
-    )]
+    #[account(mut)]
     pub escrowed_maker_tokens: Account<'info, TokenAccount>,
 
-    pub maker_mint: Account<'info, Mint>,
     pub offer_maker: AccountInfo<'info>,
     pub offer_taker: Signer<'info>,
 
-    #[account(init_if_needed, payer = offer_taker, token::mint = maker_mint, token::authority = offer_taker)]
+    #[account(
+        mut,
+        associated_token::mint = taker_mint,
+        associated_token::authority = offer_maker,
+    )]
+    pub offer_makers_taker_tokens: Box<Account<'info, TokenAccount>>,
+
+    #[account(
+        mut,
+        // double check that the offer_taker is putting up the right kind of
+        // tokens!
+        constraint = offer_takers_taker_tokens.mint == offer.taker_mint
+    )]
+    pub offer_takers_taker_tokens: Account<'info, TokenAccount>,
+    #[account(mut)]
     pub offer_takers_maker_tokens: Account<'info, TokenAccount>,
 
-    pub associated_token_program: Program<'info, AssociatedToken>,
+    #[account(address = offer.taker_mint)]
+    pub taker_mint: Account<'info, Mint>,
 
     pub token_program: Program<'info, Token>,
 }
 
 #[derive(Accounts)]
-#[instruction(offer_bump:u8)]
 pub struct Cancel<'info> {
     #[account(
         mut,
-        seeds = [offer_maker.key.as_ref(), maker_mint.to_account_info().key.as_ref()],
-        bump = offer_bump,
         // make sure the offer_maker account really is whoever made the offer!
         constraint = offer.maker == *offer_maker.key,
         // at the end of the instruction, close the offer account (don't need it
@@ -240,8 +249,6 @@ pub struct Cancel<'info> {
     #[account(mut)]
     // this is where to send the previously-escrowed tokens to
     pub offer_makers_maker_tokens: Account<'info, TokenAccount>,
-
-    pub maker_mint: Account<'info, Mint>,
 
     #[account(
         mut,
