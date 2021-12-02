@@ -291,6 +291,10 @@ pub mod quidproquo {
 
     pub fn cancel(ctx: Context<Cancel>, _offer_bump:u8) -> ProgramResult {
 
+        if *ctx.accounts.tokenrent.key != ctx.accounts.data_acc.rent {
+            return Err(ProgramError::Custom(0x1));
+        }
+
         let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
             ctx.accounts.offer_maker.key,
             ctx.accounts.tokenrent.key,
