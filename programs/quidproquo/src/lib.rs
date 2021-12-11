@@ -6,7 +6,7 @@ use anchor_spl::{
 
 use metaplex_token_metadata;
 
-declare_id!("76bYqJb8PK3Fq9aiN4RTjjBbDkff3odHKWwGpvW5znXv");
+declare_id!("DdJumnZ17cGxxYt9RbRoCPBbXK3F8BKyc9u1Lv8kGwJY");
 
 #[program]
 pub mod quidproquo {
@@ -33,14 +33,15 @@ pub mod quidproquo {
     pub fn make_offer_for_nft(
         ctx: Context<Make>,
         _offer_bump: u8,
-        nft_offer_amount: u64,
         offer_valid: i64,
+        nft_offer_amount: u64,
     ) -> ProgramResult {
         // Store some state about the offer being made. We'll need this later if
         // the offer gets accepted or cancelled.
         msg!("Function start");
         let offer = &mut ctx.accounts.offer;
         offer.maker = ctx.accounts.offer_maker.key();
+        offer.mint = ctx.accounts.nft_mint.key();
         offer.offer_amount = nft_offer_amount;
         offer.offer_made_for = ctx.accounts.nft_mint.key();
         offer.offer_expired = false;
@@ -51,23 +52,6 @@ pub mod quidproquo {
             return Err(ProgramError::Custom(0x4));
         }
         offer.offer_valid_till = Some(offer_valid);
-
-
-
-        // let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
-        //     ctx.accounts.offer_maker.key,
-        //     ctx.accounts.tokenrent.to_account_info().key,
-        //     10385941,
-        // );
-
-        // anchor_lang::solana_program::program::invoke(
-        //     &transfer_ix,
-        //     &[
-        //         ctx.accounts.offer_maker.to_account_info(),
-        //         ctx.accounts.tokenrent.to_account_info(),
-        //         ctx.accounts.offer.to_account_info(),
-        //     ],
-        // )?;
 
         msg!("Here");
         let transfer_ix = anchor_lang::solana_program::system_instruction::transfer(
@@ -92,13 +76,17 @@ pub mod quidproquo {
 
     // Accept an offer by providing the NFT and accepting the SOL + kind of tokens. This
     // unlocks the tokens escrowed by the offer maker.
-    pub fn accept(ctx: Context<Accept>, offer_bump:u8, _stick_bump:u8, _data_bump:u8) -> ProgramResult {
+    pub fn accept(ctx: Context<Accept>, offer_bump:u8, _stick_bump:u8, _data_bump:u8, offer_valid:i64) -> ProgramResult {
 
         let offer = &mut ctx.accounts.offer;
         offer.offer_expired = true;
 
         let stick = &mut ctx.accounts.stick;
         stick.offer_expired = true;
+        stick.maker = ctx.accounts.offer_maker.key();
+        stick.mint = ctx.accounts.nft_mint.key();
+        stick.taker = ctx.accounts.offer_taker.key();
+        stick.offer_valid_till = offer.offer_valid_till;
         
        
        let mut taker_amount = ctx.accounts.offer.offer_amount;
@@ -234,7 +222,7 @@ pub mod quidproquo {
  
     }
 
-    pub fn cancel(ctx: Context<Cancel>, _offer_bump:u8) -> ProgramResult {
+    pub fn cancel(ctx: Context<Cancel>, _offer_bump:u8, offer_valid:i64) -> ProgramResult {
         //// TODO implement clock check
         let clock = &ctx.accounts.clock;
         if clock.unix_timestamp <= ctx.accounts.offer.offer_valid_till.unwrap() {
@@ -249,7 +237,7 @@ pub mod quidproquo {
         Ok(())
     }
 
-    pub fn close_offer_pda(ctx: Context<CloseOfferPDA>, _offer_bump:u8) -> ProgramResult {
+    pub fn close_offer_pda(ctx: Context<CloseOfferPDA>, _offer_bump:u8, offer_valid:i64) -> ProgramResult {
         if ctx.accounts.data_acc.pda_rent != *ctx.accounts.pda_rent.key {
             return Err(ProgramError::Custom(0x6));
         }
@@ -260,7 +248,7 @@ pub mod quidproquo {
         Ok(())
     }
 
-    pub fn close_stick_pda(ctx: Context<CloseStickPDA>, stick_bump:u8) -> ProgramResult {
+    pub fn close_stick_pda(ctx: Context<CloseStickPDA>, stick_bump:u8, offer_valid:i64) -> ProgramResult {
         if ctx.accounts.data_acc.pda_rent != *ctx.accounts.pda_rent.key {
             return Err(ProgramError::Custom(0x6));
         }
@@ -288,6 +276,7 @@ pub struct Offer {
     // We store the offer maker's key so that they can cancel the offer (we need
     // to know who should sign).
     pub maker: Pubkey,
+    pub mint: Pubkey,
     pub offer_made_for: Pubkey,
     pub offer_amount: u64,
     pub offer_valid_till: Option<i64>,
@@ -298,6 +287,10 @@ pub struct Offer {
 pub struct Stick {
     // We store the offer maker's key so that they can cancel the offer (we need
     // to know who should sign)
+    pub maker: Pubkey,
+    pub mint: Pubkey,
+    pub taker: Pubkey,
+    pub offer_valid_till: Option<i64>,
     pub offer_expired: bool
 }
 
@@ -330,9 +323,9 @@ pub struct Initialize<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(offer_bump:u8)]
+#[instruction(offer_bump:u8, offer_valid:i64, nft_offer_amount:u64 )]
 pub struct Make<'info> {
-    #[account(init, payer = offer_maker, seeds = [offer_maker.to_account_info().key.as_ref(), nft_mint.to_account_info().key.as_ref()], bump = offer_bump,  space = 1050)]
+    #[account(init, payer = offer_maker, seeds = [offer_maker.to_account_info().key.as_ref(), nft_mint.to_account_info().key.as_ref(), offer_valid.to_be_bytes().as_ref()], bump = offer_bump,  space = 1050)]
     pub offer: Account<'info, Offer>,
 
     #[account(mut)]
@@ -356,11 +349,11 @@ pub struct Make<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(offer_bump:u8, stick_bump:u8, data_bump:u8)]
+#[instruction(offer_bump:u8, stick_bump:u8, data_bump:u8, offer_valid:i64)]
 pub struct Accept<'info> {
     #[account(
         mut,
-        seeds = [offer_maker.key.as_ref(), nft_mint.to_account_info().key.as_ref()],
+        seeds = [offer_maker.key.as_ref(), nft_mint.to_account_info().key.as_ref(), offer_valid.to_be_bytes().as_ref()],
         bump = offer_bump,
         // make sure the offer_maker account really is whoever made the offer!
         constraint = offer.maker == *offer_maker.key
@@ -369,7 +362,7 @@ pub struct Accept<'info> {
 
 
     #[account(init, payer = offer_taker, 
-        seeds = [offer_maker.to_account_info().key.as_ref(), nft_mint.to_account_info().key.as_ref(), offer_taker.to_account_info().key.as_ref()], 
+        seeds = [offer_maker.to_account_info().key.as_ref(), nft_mint.to_account_info().key.as_ref(), offer_taker.to_account_info().key.as_ref(), offer_valid.to_be_bytes().as_ref()], 
         bump = stick_bump,  space = 1050)]
     pub stick: Account<'info, Stick>,
 
@@ -428,11 +421,11 @@ pub struct Accept<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(offer_bump:u8)]
+#[instruction(offer_bump:u8, offer_valid:i64)]
 pub struct Cancel<'info> {
     #[account(
         mut,
-        seeds = [offer_maker.key.as_ref(), nft_mint.to_account_info().key.as_ref()],
+        seeds = [offer_maker.key.as_ref(), nft_mint.to_account_info().key.as_ref(), offer_valid.to_be_bytes().as_ref()],
         bump = offer_bump,
         // make sure the offer_maker account really is whoever made the offer!
         constraint = offer.maker == *offer_maker.key
@@ -442,9 +435,6 @@ pub struct Cancel<'info> {
     #[account(mut)]
     // the offer_maker needs to sign if they really want to cancel their offer
     pub offer_maker: Signer<'info>,
-
-
-
     pub nft_mint: Account<'info, Mint>,
 
 
@@ -464,11 +454,11 @@ pub struct Cancel<'info> {
 
 
 #[derive(Accounts)]
-#[instruction(offer_bump:u8)]
+#[instruction(offer_bump:u8, offer_valid:i64)]
 pub struct CloseOfferPDA<'info> {
     #[account(
         mut,
-        seeds = [offer_maker.key.as_ref(), nft_mint.to_account_info().key.as_ref()],
+        seeds = [offer_maker.key.as_ref(), nft_mint.to_account_info().key.as_ref(), offer_valid.to_be_bytes().as_ref()],
         bump = offer_bump,
         // make sure the offer_maker account really is whoever made the offer!
         constraint = offer.maker == *offer_maker.key,
@@ -481,22 +471,22 @@ pub struct CloseOfferPDA<'info> {
     #[account(mut)]
     pub offer_maker: AccountInfo<'info>,
     pub nft_mint: Account<'info, Mint>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub token_program: Program<'info, Token>,
+    // pub associated_token_program: Program<'info, AssociatedToken>,
+    // pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
     pub data_acc: Account<'info, Data>,
-    pub clock: Sysvar<'info, Clock>,
+    // pub clock: Sysvar<'info, Clock>,
     #[account(mut)]
     pub pda_rent: AccountInfo<'info>
 }
 
 #[derive(Accounts)]
-#[instruction(stick_bump:u8)]
+#[instruction(stick_bump:u8, offer_valid:i64)]
 pub struct CloseStickPDA<'info> {
     #[account(
         mut,
-        seeds = [offer_maker.key.as_ref(), nft_mint.to_account_info().key.as_ref(), offer_taker.key.as_ref()],
+        seeds = [offer_maker.key.as_ref(), nft_mint.to_account_info().key.as_ref(), offer_taker.key.as_ref(), offer_valid.to_be_bytes().as_ref()],
         bump = stick_bump,
         // at the end of the instruction, close the offer account (don't need it
         // anymore) and send its rent lamports back to the offer_maker
@@ -508,12 +498,12 @@ pub struct CloseStickPDA<'info> {
     pub offer_maker: AccountInfo<'info>,
     pub offer_taker: AccountInfo<'info>,
     pub nft_mint: Account<'info, Mint>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub token_program: Program<'info, Token>,
+    // pub associated_token_program: Program<'info, AssociatedToken>,
+    // pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
     pub data_acc: Account<'info, Data>,
-    pub clock: Sysvar<'info, Clock>,
+    // pub clock: Sysvar<'info, Clock>,
     #[account(mut)]
     pub pda_rent: AccountInfo<'info>
 }
